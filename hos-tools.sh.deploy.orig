@@ -1,9 +1,0 @@
-#!/bin/sh -e
-sed -e '1,/^exit$/d' "$0" | tar xzpf -
-cd ./focal
-cp ./tools.img /var/lib/libvirt/images/
-/usr/bin/virsh create ./tools.xml
-echo "waiting for focal-point to be available"
-sleep 30
-./focal-point
-exit

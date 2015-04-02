@@ -1,9 +1,27 @@
 #!/bin/sh -e
 sed -e '1,/^exit$/d' "$0" | tar xzpf -
-cd ./focal
-cp ./tools.img /var/lib/libvirt/images/
-/usr/bin/virsh create ./tools.xml
-echo "waiting for focal-point to be available"
-sleep 30
+mv ./focal-client ./focal
+mv ./focal-server /opt/focal-server
+source tripleo/tripleo-incubator/scripts/hp_ced_load_config.sh tripleo/configs/kvm-custom-ips.json
+bash tripleo/tripleo-incubator/scripts/hp_ced_host_manager.sh --local-setup
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+ip link add veth0 type veth peer name veth1
+ip link add mgmt0 type veth peer name mgmt1
+brctl addif virbr0 mgmt1
+ovs-vsctl add-port brbm veth0
+ip link set dev mgmt1 up
+ip link set dev veth0 up
+ip netns add tools
+ip link set mgmt0 netns tools
+ip link set veth1 netns tools
+ip netns exec tools ip a add 127.0.0.1/8 dev lo
+ip netns exec tools ip a add 192.168.122.224/24 dev mgmt0
+ip netns exec tools ip link set dev lo up
+ip netns exec tools ip link set dev mgmt0 up
+cd /opt/focal-server
+ip netns exec tools bash ./redis-server &
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+ip netns exec tools bash ./focal-server start
+cd /root/focal
 ./focal-point
 exit
