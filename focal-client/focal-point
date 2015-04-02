@@ -1,0 +1,336 @@
+#!/usr/bin/env python
+import sys
+import select
+import redis
+import curses, curses.panel
+import subprocess
+import time
+
+r = redis.Redis('192.168.122.224')
+scr = curses.initscr()
+default_size = scr.getmaxyx()
+color = curses.start_color()
+curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
+curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
+curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+curses.init_pair(4, curses.COLOR_WHITE, curses.COLOR_BLACK)
+x = int(default_size[1])/2
+y = int(default_size[0])/2
+win1 = curses.newwin(20, 80, y - 10, x - 40)
+win1.border(0)
+pan1 = curses.panel.new_panel(win1)
+pan1.top()
+help_scr = curses.newwin(20, 80, y - 10, x - 40)
+help_scr.border(0)
+pan2 = curses.panel.new_panel(help_scr)
+pan2.bottom()
+out_scr = curses.newwin(20, 80, y - 10, x - 40)
+out_scr.border(0)
+pan3 = curses.panel.new_panel(out_scr)
+pan3.bottom()
+last = time.time()
+
+def help_screen():
+    global help_scr
+    global pan1
+    global pan2
+    pan2.top()
+    help_scr.addstr(1, 3, "Commands:", curses.color_pair(3))
+    help_scr.addstr(3, 3, "1 - Enter new starting address for DHCP (First address will be server)", curses.color_pair(3))
+    help_scr.addstr(4, 3, "2 - Enter new ending address for DHCP", curses.color_pair(3))
+    help_scr.addstr(5, 3, "3 - Enter new Netmask for DHCP network", curses.color_pair(3))
+    help_scr.addstr(6, 3, "4 - Enter new Gateway for DHCP network", curses.color_pair(3))
+    help_scr.addstr(7, 3, "5 - Enter NTP Server address to set hwclocks", curses.color_pair(3))
+    help_scr.addstr(8, 3, "6 - Enter node count to be PXE booted(Seed host does not count)", curses.color_pair(3))
+    help_scr.addstr(9, 3, "go - Start PXE, gather data, and build baremetal.csv", curses.color_pair(3))
+    help_scr.addstr(11, 3, "...Press Any Key to Continue...", curses.color_pair(3))
+    help_scr.refresh()
+    curses.noecho()
+    help_scr.getch()
+    pan1.top()
+    curses.echo()
+    pan1.show()
+
+
+def main_loop():
+    global win1
+    global r
+    while True:
+        line = win1.getstr(16, 19)
+        win1.addstr(16, 19, "                                                            ")
+        win1.refresh()
+        if (line == "quit" or line == "exit"):
+            break
+        elif line == "1":
+            win1.addstr(16, 10, "Starting Addr:", curses.color_pair(4))
+            win1.refresh()
+            addr = win1.getstr(16, 25)
+            win1.addstr(16, 25, "                                             ")
+            if addr != "":
+                r.set('tools_ip_s', addr)
+                r.publish('tools', 'set_ipaddr')
+            update_screen()
+        elif line == "2":
+            win1.addstr(16, 10, "Ending Addr:", curses.color_pair(4))
+            win1.refresh()
+            addr = win1.getstr(16, 24)
+            win1.addstr(16, 24, "                                             ")
+            if addr != "":
+                r.set('tools_ip_e', addr)
+            update_screen()
+        elif line == "3":
+            win1.addstr(16, 10, "Netmask:", curses.color_pair(4))
+            win1.refresh()
+            addr = win1.getstr(16, 19)
+            win1.addstr(16, 19, "                                             ")
+            if addr != "":
+                r.set('tools_nm', addr)
+                r.publish('tools', 'set_ipaddr')
+            update_screen()
+        elif line == "4":
+            win1.addstr(16, 10, "Gateway:", curses.color_pair(4))
+            win1.refresh()
+            addr = win1.getstr(16, 19)
+            win1.addstr(16, 19, "                                             ")
+            if addr != "":
+                r.set('tools_gw', addr)
+            update_screen()
+        elif line == "5":
+            win1.addstr(16, 10, "NTP:    ", curses.color_pair(4))
+            win1.refresh()
+            addr = win1.getstr(16, 15)
+            win1.addstr(16, 15, "                                             ")
+            if addr != "":
+                r.set('tools_ntp', addr)
+                r.publish('tools', 'set_ntp')
+            update_screen()
+        elif line == "6":
+            win1.addstr(16, 10, "Nodes:    ", curses.color_pair(4))
+            win1.refresh()
+            addr = win1.getstr(16, 17)
+            win1.addstr(16, 17, "                                             ")
+            if addr != "":
+                r.set('tools_nodes', addr)
+            update_screen()
+        elif line == "go" or line == "sudo make me a sandwich":
+            power_off_all()
+            time.sleep(1)
+            set_all_to_pxe()
+            time.sleep(1)
+            power_on_all()
+            time.sleep(1)
+            r.publish('tools', 'start')
+            win1.addstr(16, 10, "Gathering data powering on nodes now...", curses.color_pair(4))
+            curses.noecho()
+            win1.refresh()
+            wait = True
+            nc = 0
+            while wait:
+                keys = r.keys('*')
+                for k in keys:
+                    if not "tools" in k:
+                        nc += 1
+                win1.addstr(17, 10, "Found {} nodes out of {}".format(nc,r.get('tools_nodes')), curses.color_pair(2))
+                win1.refresh()
+                time.sleep(2)
+                if int(nc) == int(r.get('tools_nodes')):
+                    wait = False
+                else:
+                    nc = 0
+            win1.addstr(16, 10, "Data collection complete. Writing baremetal.csv file.", curses.color_pair(2))
+            win1.addstr(17, 10, "Path: /root/baremetal.csv.new               ", curses.color_pair(2))
+            win1.refresh()
+            build_csv()
+            win1.addstr(18, 10, "File created. Press any key to continue...", curses.color_pair(2))
+            win1.refresh()
+            addr = win1.getch(16, 17)
+            win1.addstr(16, 10, "                                                     ", curses.color_pair(2))
+            win1.addstr(17, 10, "                                            ", curses.color_pair(2))
+            win1.addstr(18, 10, "                                          ", curses.color_pair(2))
+            win1.refresh()
+            curses.echo()
+            r.publish('tools', 'stop')
+        elif line == "rebuild":
+            build_csv()
+            win1.addstr(16, 17, "                                             ")
+            update_screen()
+        elif line == "ilo stop":
+            power_off_all()
+            win1.addstr(16, 17, "                                             ")
+            update_screen()
+        elif line == "ilo start":
+            power_on_all()
+            win1.addstr(16, 17, "                                             ")
+            update_screen()
+        elif line == "ilo pxe":
+            set_all_to_pxe()
+            win1.addstr(16, 17, "                                             ")
+            update_screen()
+        elif line == "redis reset":
+            r.flushall()
+            win1.addstr(16, 17, "                                             ")
+            update_screen()
+        else:
+            help_screen()
+        win1.addstr(16, 10, "Command:                 ", curses.color_pair(4))
+
+
+def update_screen():
+    global win1
+    global r
+    win1.addstr(2, 6,"                           " , curses.color_pair(2))
+    win1.addstr(2, 44,"                           " , curses.color_pair(2))
+    win1.addstr(5, 6,"                           " , curses.color_pair(2))
+    win1.addstr(5, 44,"                           " , curses.color_pair(2))
+    win1.addstr(8, 6,"                           " , curses.color_pair(2))
+    win1.addstr(8, 44,"                           " , curses.color_pair(2))
+    win1.addstr(2, 6, r.get('tools_ip_s'), curses.color_pair(2))
+    win1.addstr(2, 44, r.get('tools_ip_e'), curses.color_pair(2))
+    win1.addstr(5, 6, r.get('tools_nm'), curses.color_pair(2))
+    win1.addstr(5, 44, r.get('tools_gw'), curses.color_pair(2))
+    win1.addstr(8, 6, r.get('tools_ntp'), curses.color_pair(2))
+    win1.addstr(8, 44, r.get('tools_nodes'), curses.color_pair(2))
+    win1.refresh()
+
+
+def draw_screen():
+    global win1
+    win1.addstr(1, 3, "+-----| IP Start Range |-----+" , curses.color_pair(3))
+    win1.addstr(2, 3, "1." , curses.color_pair(4))
+    win1.addstr(1, 40, "+-----| IP End Range |-----+" , curses.color_pair(3))
+    win1.addstr(2, 40, "2." , curses.color_pair(4))
+    win1.addstr(4, 3, "+-----| Netmask |-----+", curses.color_pair(3))
+    win1.addstr(5, 3, "3." , curses.color_pair(4))
+    win1.addstr(4, 40, "+-----| Gateway |-----+", curses.color_pair(3))
+    win1.addstr(5, 40, "4." , curses.color_pair(4))
+    win1.addstr(7, 3, "+-----| NTP |-----+", curses.color_pair(3))
+    win1.addstr(8, 3, "5." , curses.color_pair(4))
+    win1.addstr(7, 40, "+-----| Node Count |-----+", curses.color_pair(3))
+    win1.addstr(8, 40, "6." , curses.color_pair(4))
+    win1.addstr(16, 10, "Command:", curses.color_pair(4))
+    win1.refresh()
+
+
+def set_defaults():
+    global r
+    if r.exists('tools_ip_s') == 0:
+        r.set('tools_ip_s', '192.168.0.1')
+    if r.exists('tools_ip_e') == 0:
+        r.set('tools_ip_e', '192.168.0.250')
+    if r.exists('tools_nm') == 0:
+        r.set('tools_nm', '255.255.255.0')
+    if r.exists('tools_gw') == 0:
+        r.set('tools_gw', '192.168.0.1')
+    if r.exists('tools_ntp') == 0:
+        r.set('tools_ntp', '192.168.122.1')
+    if r.exists('tools_nodes') == 0:
+        r.set('tools_nodes', '7')
+    r.publish('tools', 'set_ipaddr')
+    r.publish('tools', 'set_ntp')
+
+
+def build_csv():
+    global r
+    keys = r.keys('*')
+    nkeys = []
+    baremetal = open('/root/baremetal.csv.new', 'w+')
+    ilo = open('/root/focal/ilo.csv', 'w+')
+    for item in keys:
+        if not 'tools' in item and len(item) > 0:
+            for hk in r.hkeys(item):
+                if 'status' in hk:
+                    if r.hget(item, hk) == 'up':
+                        mac = r.hget(item, hk.replace('status','mac'))     
+                        break
+            user = r.hget(item, 'ipmi:user')     
+            passwd = r.hget(item, 'ipmi:password')     
+            ip = r.hget(item, 'ipmi:ip')     
+            cpu = r.hget(item, 'cpu:threads')     
+            ram = r.hget(item, 'ram')     
+            disk = r.hget(item, 'disk:sda:size')     
+            size = int(disk)/2/1024/1024
+            nkeys.append({'mac':str(mac),'user':str(user),'passwd':str(passwd),'ip':str(ip),'cpu':str(cpu),'ram':str(ram),'disk':str(size)})
+    keys = sorted(nkeys, key=lambda k: k['ip']) 
+    count=0
+    for i in keys:
+        if count == 0:
+            role = 'Undercloud'
+        elif count == 1 or count == 2 or count == 3:
+            role = 'OvercloudControl'
+        elif count == 4 or count == 5:
+            role = 'OvercloudSwiftStorage'
+        else:
+            role = 'OvercloudCompute'
+        baremetal.write('{},{},{},{},{},{},{},{},IPMI\n'.format(i['mac'],i['user'],i['passwd'],i['ip'],i['cpu'],i['ram'],int(i['disk']),role))
+        ilo.write('{},{},{}\n'.format(i['user'],i['passwd'],i['ip']))
+        count += 1
+
+
+def get_ilo_creds(ilo_file):
+    with open(ilo_file, 'r') as f:
+        for line in f:
+            user,passwd,ip = line.split(',')
+            yield {'user': user,
+                   'passwd': passwd,
+                   'ip': ip}
+            
+
+def build_cmd(ip, user, passwd, cmd):
+    return ("ipmitool -I lanplus -U %(user)s -P %(passwd)s -H %(ip)s %(cmd)s" 
+           % {'user': user, 'passwd': passwd, 'ip': ip, 'cmd': cmd})
+
+
+def power_on_node(ip, user, passwd):
+    cmd = build_cmd(ip, user, passwd, "power on")
+    run_cmd(cmd)
+    
+
+def power_on_all():
+    for ilo in get_ilo_creds('ilo.csv'):
+        power_on_node(ilo['ip'], ilo['user'], ilo['passwd'])
+        
+
+def power_off_node(ip, user, passwd):
+    cmd = build_cmd(ip, user, passwd, "power off")
+    run_cmd(cmd)
+
+
+def power_off_all():
+    for ilo in get_ilo_creds('ilo.csv'):
+        power_off_node(ilo['ip'], ilo['user'], ilo['passwd'])
+
+                
+
+def set_to_pxe(ip, user, passwd):
+    cmd = build_cmd(ip, user, passwd, "chassis bootdev pxe options=persistent")
+    run_cmd(cmd)
+
+
+def set_all_to_pxe():
+    for ilo in get_ilo_creds('ilo.csv'):
+        set_to_pxe(ilo['ip'], ilo['user'], ilo['passwd'])
+
+
+def run_cmd(cmd):
+    s = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    s.wait()
+    data = s.stdout
+    if s.returncode != 0:
+        global win1
+        win1.addstr(17, 10, "ERROR Performing Command", curses.color_pair(1))
+        win1.refresh()
+        time.sleep(2)
+        win1.addstr(17, 10, "                        ")
+        win1.refresh()
+
+
+set_defaults()
+draw_screen()
+update_screen()
+try:
+    main_loop()
+    curses.endwin()
+except KeyboardInterrupt:
+    pass
+    r.publish('tools', 'stop')
+    curses.endwin()

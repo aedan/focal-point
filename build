@@ -1,0 +1,3 @@
+#!/bin/bash
+cp hos-tools.sh.deploy hos-tools.sh
+tar czf - ./focal-client ./focal-server >> hos-tools.sh

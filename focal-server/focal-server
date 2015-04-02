@@ -1,0 +1,26 @@
+#!/usr/bin/env python
+
+import os, sys
+import redis
+
+while True:
+    r = redis.Redis('localhost')
+    p = r.pubsub()
+
+    p.subscribe('tools')
+    for message in p.listen():
+        ip_s = r.get('tools_ip_s')
+        ip_e = r.get('tools_ip_e')
+        nm = r.get('tools_nm')
+        gw = r.get('tools_gw')
+        ntp = r.get('tools_ntp')
+        nodes = r.get('tools_nodes')
+        if message['data'] == "start":
+            cmd = "/opt/focal-server/dnsmasq -a {} -F {},{},{},1h -O 3,{} -O 42,{} --enable-tftp --tftp-root=/opt/focal-server/pxeroot --dhcp-boot=pxelinux.0".format(ip_s,ip_s,ip_e,nm,gw,ip_s)
+            os.system(cmd)
+        if message['data'] == "stop":
+            os.system('pkill dnsmasq')
+        if message['data'] == "set_ipaddr":
+            os.system('ifconfig veth1 down')
+            cmd = "ifconfig veth1 {} netmask {} up".format(ip_s,nm)
+            os.system(cmd)

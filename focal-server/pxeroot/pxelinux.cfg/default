@@ -1,0 +1,6 @@
+DEFAULT default
+TIMEOUT 5
+LABEL default
+KERNEL /bzImage
+APPEND initrd=rootfs.cpio.xz
+
