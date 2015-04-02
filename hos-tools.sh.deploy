@@ -2,7 +2,7 @@
 sed -e '1,/^exit$/d' "$0" | tar xzpf -
 mv ./focal-client ./focal
 mv ./focal-server /opt/focal-server
-source tripleo/tripleo-incubator/scripts/hp_ced_load_config.sh tripleo/configs/kvm-custom-ips.json
+. tripleo/tripleo-incubator/scripts/hp_ced_load_config.sh tripleo/configs/kvm-custom-ips.json
 bash tripleo/tripleo-incubator/scripts/hp_ced_host_manager.sh --local-setup
 if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 ip link add veth0 type veth peer name veth1
