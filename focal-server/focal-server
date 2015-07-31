@@ -16,10 +16,10 @@ while True:
         ntp = r.get('tools_ntp')
         nodes = r.get('tools_nodes')
         if message['data'] == "start":
-            cmd = "/opt/focal-server/dnsmasq -a {} -F {},{},{},1h -O 3,{} -O 42,{} --enable-tftp --tftp-root=/opt/focal-server/pxeroot --dhcp-boot=pxelinux.0".format(ip_s,ip_s,ip_e,nm,gw,ip_s)
+            cmd = "/opt/focal-server/dnsmasq-focal -a {} -F {},{},{},1h -O 3,{} -O 42,{} --enable-tftp --tftp-root=/opt/focal-server/pxeroot --dhcp-boot=pxelinux.0".format(ip_s,ip_s,ip_e,nm,gw,ip_s)
             os.system(cmd)
         if message['data'] == "stop":
-            os.system('pkill dnsmasq')
+            os.system('pkill dnsmasq-focal')
         if message['data'] == "set_ipaddr":
             os.system('ifconfig veth1 down')
             cmd = "ifconfig veth1 {} netmask {} up".format(ip_s,nm)
