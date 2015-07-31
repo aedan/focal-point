@@ -5,6 +5,7 @@ import redis
 import curses, curses.panel
 import subprocess
 import time
+import ribcl
 
 r = redis.Redis('192.168.122.224')
 scr = curses.initscr()
@@ -112,6 +113,14 @@ def main_loop():
             if addr != "":
                 r.set('tools_nodes', addr)
             update_screen()
+        elif line == "7":
+            win1.addstr(16, 17, "                                             ")
+            addr = r.get('tools_boot')
+            if addr == "UEFI":
+                r.set('tools_boot', 'LEGACY')
+            else:
+                r.set('tools_boot', 'UEFI')
+            update_screen()
         elif line == "go" or line == "sudo make me a sandwich":
             power_off_all()
             time.sleep(1)
@@ -141,6 +150,7 @@ def main_loop():
             win1.addstr(17, 10, "Path: /root/baremetal.csv.new               ", curses.color_pair(2))
             win1.refresh()
             build_csv()
+            set_all_to_boot()
             win1.addstr(18, 10, "File created. Press any key to continue...", curses.color_pair(2))
             win1.refresh()
             addr = win1.getch(16, 17)
@@ -166,6 +176,10 @@ def main_loop():
             set_all_to_pxe()
             win1.addstr(16, 17, "                                             ")
             update_screen()
+        elif line == "ilo boot":
+            set_all_to_boot()
+            win1.addstr(16, 17, "                                             ")
+            update_screen()
         elif line == "redis reset":
             r.flushall()
             win1.addstr(16, 17, "                                             ")
@@ -184,12 +198,14 @@ def update_screen():
     win1.addstr(5, 44,"                           " , curses.color_pair(2))
     win1.addstr(8, 6,"                           " , curses.color_pair(2))
     win1.addstr(8, 44,"                           " , curses.color_pair(2))
+    win1.addstr(11, 6,"                           " , curses.color_pair(2))
     win1.addstr(2, 6, r.get('tools_ip_s'), curses.color_pair(2))
     win1.addstr(2, 44, r.get('tools_ip_e'), curses.color_pair(2))
     win1.addstr(5, 6, r.get('tools_nm'), curses.color_pair(2))
     win1.addstr(5, 44, r.get('tools_gw'), curses.color_pair(2))
     win1.addstr(8, 6, r.get('tools_ntp'), curses.color_pair(2))
     win1.addstr(8, 44, r.get('tools_nodes'), curses.color_pair(2))
+    win1.addstr(11, 6, r.get('tools_boot'), curses.color_pair(2))
     win1.refresh()
 
 
@@ -207,6 +223,8 @@ def draw_screen():
     win1.addstr(8, 3, "5." , curses.color_pair(4))
     win1.addstr(7, 40, "+-----| Node Count |-----+", curses.color_pair(3))
     win1.addstr(8, 40, "6." , curses.color_pair(4))
+    win1.addstr(10, 3, "+-----| Boot Mode |-----+", curses.color_pair(3))
+    win1.addstr(11, 3, "7." , curses.color_pair(4))
     win1.addstr(16, 10, "Command:", curses.color_pair(4))
     win1.refresh()
 
@@ -225,6 +243,8 @@ def set_defaults():
         r.set('tools_ntp', '192.168.122.1')
     if r.exists('tools_nodes') == 0:
         r.set('tools_nodes', '7')
+    if r.exists('tools_boot') == 0:
+        r.set('tools_boot', 'UEFI')
     r.publish('tools', 'set_ipaddr')
     r.publish('tools', 'set_ntp')
 
@@ -235,6 +255,10 @@ def build_csv():
     nkeys = []
     baremetal = open('/root/baremetal.csv.new', 'w+')
     ilo = open('/root/focal/ilo.csv', 'w+')
+    if r.get('tools_boot') == 'UEFI':
+        boot = 'HP_iLO4'
+    else:
+        boot = 'IPMI'
     for item in keys:
         if not 'tools' in item and len(item) > 0:
             for hk in r.hkeys(item):
@@ -247,9 +271,9 @@ def build_csv():
             ip = r.hget(item, 'ipmi:ip')     
             cpu = r.hget(item, 'cpu:threads')     
             ram = r.hget(item, 'ram')     
-            disk = r.hget(item, 'disk:sda:size')     
+            disk = str(r.hget(item, 'disk:sda:size'))
             size = int(disk)/2/1024/1024
-            nkeys.append({'mac':str(mac),'user':str(user),'passwd':str(passwd),'ip':str(ip),'cpu':str(cpu),'ram':str(ram),'disk':str(size)})
+            nkeys.append({'mac':str(mac),'user':str(user),'passwd':str(passwd),'ip':str(ip),'cpu':str(cpu),'ram':str(ram),'disk':str(size),'boot':str(boot)})
     keys = sorted(nkeys, key=lambda k: k['ip']) 
     count=0
     for i in keys:
@@ -261,7 +285,7 @@ def build_csv():
             role = 'OvercloudSwiftStorage'
         else:
             role = 'OvercloudCompute'
-        baremetal.write('{},{},{},{},{},{},{},{},IPMI\n'.format(i['mac'],i['user'],i['passwd'],i['ip'],i['cpu'],i['ram'],int(i['disk']),role))
+        baremetal.write('{},{},{},{},{},{},{},{},{}\n'.format(i['mac'],i['user'],i['passwd'],i['ip'],i['cpu'],i['ram'],int(i['disk']),role,i['boot']))
         ilo.write('{},{},{}\n'.format(i['user'],i['passwd'],i['ip']))
         count += 1
 
@@ -305,10 +329,20 @@ def set_to_pxe(ip, user, passwd):
     cmd = build_cmd(ip, user, passwd, "chassis bootdev pxe options=persistent")
     run_cmd(cmd)
 
+def set_to_boot(ip, user, passwd):
+    global r
+    ilo_client = ribcl.IloClient(str(ip.strip()), str(user), str(passwd))
+    bootMode = ilo_client.get_supported_boot_mode()
+    if bootMode != 'UNKNOWN':
+        ilo_client.set_pending_boot_mode(str(r.get('tools_boot')))
 
 def set_all_to_pxe():
     for ilo in get_ilo_creds('ilo.csv'):
         set_to_pxe(ilo['ip'], ilo['user'], ilo['passwd'])
+
+def set_all_to_boot():
+    for ilo in get_ilo_creds('ilo.csv'):
+        set_to_boot(ilo['ip'], ilo['user'], ilo['passwd'])
 
 
 def run_cmd(cmd):
