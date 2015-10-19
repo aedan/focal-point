@@ -1,13 +1,7 @@
 #!/bin/bash
 pkill redis-server
-pkill dnsmasq
+pkill dnsmasq-focal
 pkill focal-server
-pkill ntpd
-ovs-vsctl del-port brbm veth0
-ip link delete mgmt1
-ip link delete veth0
-ip netns delete tools
-cd /root/
+cd 
 rm -rf /opt/focal-server
-rm -rf /root/focal
-service ntp start
+rm -rf $HOME/focal

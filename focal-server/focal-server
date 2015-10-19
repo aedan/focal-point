@@ -2,6 +2,11 @@
 
 import os, sys
 import redis
+import socket, struct
+
+def ip2long(ip):
+    packedIP = socket.inet_aton(ip)
+    return struct.unpack("!L", packedIP)[0]
 
 while True:
     r = redis.Redis('localhost')
@@ -9,18 +14,15 @@ while True:
 
     p.subscribe('tools')
     for message in p.listen():
-        ip_s = r.get('tools_ip_s')
-        ip_e = r.get('tools_ip_e')
+        ip = r.get('tools_ip_s')
+        ip_s = r.get('tools_ip_e')
+        nodes = r.get('tools_nodes')
+        ip_e = socket.inet_ntoa(struct.pack('!L', ip2long(ip_s) + int(nodes) + 1))
         nm = r.get('tools_nm')
         gw = r.get('tools_gw')
         ntp = r.get('tools_ntp')
-        nodes = r.get('tools_nodes')
         if message['data'] == "start":
-            cmd = "/opt/focal-server/dnsmasq-focal -a {} -F {},{},{},1h -O 3,{} -O 42,{} --enable-tftp --tftp-root=/opt/focal-server/pxeroot --dhcp-boot=pxelinux.0".format(ip_s,ip_s,ip_e,nm,gw,ip_s)
+            cmd = "/opt/focal-server/dnsmasq-focal -a {} -F {},{},{},1h -O 3,{} -O 42,{} --enable-tftp --tftp-root=/opt/focal-server/pxeroot --dhcp-boot=pxelinux.0".format(ip,ip_s,ip_e,nm,gw,ntp)
             os.system(cmd)
         if message['data'] == "stop":
             os.system('pkill dnsmasq-focal')
-        if message['data'] == "set_ipaddr":
-            os.system('ifconfig veth1 down')
-            cmd = "ifconfig veth1 {} netmask {} up".format(ip_s,nm)
-            os.system(cmd)
